@@ -1,13 +1,13 @@
-﻿using System;
-using System.IO;
-
-using Intersect.Client.Framework.Audio;
+﻿using Intersect.Client.Framework.Audio;
 using Intersect.Client.Interface.Game.Chat;
 using Intersect.Client.Localization;
 using Intersect.Logging;
 
 using Microsoft.Xna.Framework.Audio;
 using Microsoft.Xna.Framework.Content;
+
+using System;
+using System.IO;
 
 namespace Intersect.Client.MonoGame.Audio
 {

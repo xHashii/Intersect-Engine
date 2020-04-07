@@ -15,7 +15,7 @@ namespace Intersect.Client.MonoGame.Audio
 
         public static MonoMusicInstance Instance = null;
 
-        private readonly DynamicSoundEffectInstance mSong;
+        private readonly SoundEffectInstance mSong;
 
         private readonly MonoMusicSource mSource;
 

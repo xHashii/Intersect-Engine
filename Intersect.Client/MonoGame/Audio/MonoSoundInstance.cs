@@ -1,10 +1,10 @@
-﻿using System;
-
-using Intersect.Client.General;
+﻿using Intersect.Client.General;
 
 using JetBrains.Annotations;
 
 using Microsoft.Xna.Framework.Audio;
+
+using System;
 
 namespace Intersect.Client.MonoGame.Audio
 {

@@ -1,8 +1,8 @@
-﻿using System;
-
-using Intersect.Client.Framework.Audio;
+﻿using Intersect.Client.Framework.Audio;
 
 using JetBrains.Annotations;
+
+using System;
 
 namespace Intersect.Client.MonoGame.Audio
 {
