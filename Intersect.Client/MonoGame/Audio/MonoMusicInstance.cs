@@ -1,11 +1,11 @@
 ﻿using System;
+using System.Threading.Tasks;
 
 using Intersect.Client.General;
 
 using JetBrains.Annotations;
 
 using Microsoft.Xna.Framework.Audio;
-using Microsoft.Xna.Framework.Media;
 
 namespace Intersect.Client.MonoGame.Audio
 {
@@ -15,7 +15,11 @@ namespace Intersect.Client.MonoGame.Audio
 
         public static MonoMusicInstance Instance = null;
 
-        private readonly SoundEffectInstance mSong;
+        private SoundEffectInstance mSong;
+
+        private bool mLoading;
+
+        private AudioInstanceState mDelayedAudioInstanceState;
 
         private readonly MonoMusicSource mSource;
 
@@ -26,19 +30,52 @@ namespace Intersect.Client.MonoGame.Audio
         // ReSharper disable once SuggestBaseTypeForParameter
         public MonoMusicInstance([NotNull] MonoMusicSource source) : base(source)
         {
-            //Only allow one music player at a time
-            if (Instance != null)
-            {
-                Instance.Stop();
-                Instance.Dispose();
-                Instance = null;
-            }
-
+            // Only allow one music player at a time
+            Instance?.Stop();
+            Instance?.Dispose();
             Instance = this;
+
             mSource = source;
+            mDelayedAudioInstanceState = AudioInstanceState.Stopped;
+            mLoading = true;
 
+            Task.Run(
+                async () =>
+                {
+                    mSong = await source.LoadSong();
+                    mLoading = false;
 
-            mSong = source.LoadSong();
+                    InternalLoopSet();
+#if !AUDIO_STREAMING
+                    SynchronizeVolume();
+#endif
+
+                    switch (mDelayedAudioInstanceState)
+                    {
+                        case AudioInstanceState.Playing:
+                            mSong?.Play();
+                            break;
+
+                        case AudioInstanceState.Paused:
+                            mSong?.Pause();
+                            break;
+
+                        case AudioInstanceState.Stopped:
+                            // Nothing really to do, it should already be stopped
+                            break;
+
+                        case AudioInstanceState.Disposed:
+                            // Definitely nothing to do, though it shouldn't be possible
+                            break;
+
+                        default:
+                            throw new ArgumentOutOfRangeException(
+                                nameof(mDelayedAudioInstanceState),
+                                $@"{(int) mDelayedAudioInstanceState} is not a valid value for {nameof(AudioInstanceState)}."
+                            );
+                    }
+                }
+            );
         }
 
         public override AudioInstanceState State
@@ -54,10 +91,13 @@ namespace Intersect.Client.MonoGame.Audio
                 {
                     case SoundState.Playing:
                         return AudioInstanceState.Playing;
+
                     case SoundState.Paused:
                         return AudioInstanceState.Paused;
+
                     case SoundState.Stopped:
                         return AudioInstanceState.Stopped;
+
                     default:
                         return AudioInstanceState.Disposed;
                 }
@@ -66,6 +106,7 @@ namespace Intersect.Client.MonoGame.Audio
 
         public override void Play()
         {
+            mDelayedAudioInstanceState = AudioInstanceState.Playing;
             if (mSong != null && !mSong.IsDisposed)
             {
                 mSong.Play();
@@ -74,6 +115,7 @@ namespace Intersect.Client.MonoGame.Audio
 
         public override void Pause()
         {
+            mDelayedAudioInstanceState = AudioInstanceState.Paused;
             if (mSong != null && !mSong.IsDisposed)
             {
                 mSong.Pause();
@@ -82,6 +124,7 @@ namespace Intersect.Client.MonoGame.Audio
 
         public override void Stop()
         {
+            mDelayedAudioInstanceState = AudioInstanceState.Stopped;
             if (mSong != null && !mSong.IsDisposed)
             {
                 mSong.Stop();
@@ -90,21 +133,34 @@ namespace Intersect.Client.MonoGame.Audio
 
         public override void SetVolume(int volume, bool isMusic = false)
         {
-            if (mSong != null && !mSong.IsDisposed)
+            mVolume = volume;
+
+            if (mSong == null || mSong.IsDisposed)
             {
-                mVolume = volume;
-                try
-                {
-                    mSong.Volume = mVolume * (Globals.Database.MusicVolume / 100f) / 100f;
-                }
-                catch (NullReferenceException)
-                {
-                    // song changed while changing volume
-                }
-                catch (Exception)
-                {
-                    // device not ready
-                }
+                return;
+            }
+
+            SynchronizeVolume();
+        }
+
+        private void SynchronizeVolume()
+        {
+            if (mSong == null)
+            {
+                return;
+            }
+
+            try
+            {
+                mSong.Volume = ComputeVolume(mVolume, Globals.Database.MusicVolume);
+            }
+            catch (NullReferenceException)
+            {
+                // song changed while changing volume
+            }
+            catch (Exception)
+            {
+                // device not ready
             }
         }
 
@@ -117,7 +173,9 @@ namespace Intersect.Client.MonoGame.Audio
         {
             if (mSong != null)
             {
-                //mSong.IsLooped = IsLooping;
+#if !AUDIO_STREAMING
+                mSong.IsLooped = IsLooping;
+#endif
             }
         }
 

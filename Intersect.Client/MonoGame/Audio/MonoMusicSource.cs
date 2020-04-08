@@ -1,7 +1,6 @@
 ﻿using Intersect.Client.Framework.Audio;
 using Intersect.Client.Interface.Game.Chat;
 using Intersect.Client.Localization;
-using Intersect.Client.Utilities;
 using Intersect.Logging;
 
 using JetBrains.Annotations;
@@ -11,6 +10,8 @@ using Microsoft.Xna.Framework.Audio;
 using NVorbis;
 
 using System;
+using System.Diagnostics;
+using System.Threading.Tasks;
 
 namespace Intersect.Client.MonoGame.Audio
 {
@@ -31,48 +32,52 @@ namespace Intersect.Client.MonoGame.Audio
 
         public override GameAudioInstance CreateInstance() => new MonoMusicInstance(this);
 
-        public SoundEffectInstance LoadSong()
+        public async Task<SoundEffectInstance> LoadSong()
         {
             if (string.IsNullOrWhiteSpace(mPath))
             {
                 return null;
             }
 
-            try
-            {
-                if (mReader == null)
+            return await Task.Run(
+                () =>
                 {
-                    mReader = new VorbisReader(mPath);
-                }
+                    try
+                    {
+                        if (mReader == null)
+                        {
+                            mReader = new VorbisReader(mPath);
+                        }
 
-                if (mInstance != null)
-                {
-                    mInstance.Dispose();
-                    mInstance = null;
-                }
+                        if (mInstance != null)
+                        {
+                            mInstance.Dispose();
+                            mInstance = null;
+                        }
 
 #if AUDIO_STREAMING
-                    var dynamicInstance = new DynamicSoundEffectInstance(mReader.SampleRate, mReader.Channels == 1 ? AudioChannels.Mono : AudioChannels.Stereo);
-                    dynamicInstance.BufferNeeded += BufferNeeded;
-                    mInstance = dynamicInstance;
+                        var dynamicInstance = new DynamicSoundEffectInstance(mReader.SampleRate, mReader.Channels == 1 ? AudioChannels.Mono : AudioChannels.Stereo);
+                        dynamicInstance.BufferNeeded += BufferNeeded;
+                        mInstance = dynamicInstance;
 #else
-                var soundEffect = Load(mReader);
-                mInstance = soundEffect?.CreateInstance();
+                        var soundEffect = Load(mReader);
+                        mInstance = soundEffect?.CreateInstance();
 #endif
 
-                return mInstance;
-            }
-            catch (Exception exception)
-            {
-                Log.Error($"Error loading '{mPath}'.", exception);
-                ChatboxMsg.AddMessage(
-                    new ChatboxMsg(
-                        Strings.Errors.LoadFile.ToString(Strings.Words.lcase_sound), new Color(0xBF, 0x0, 0x0)
-                    )
-                );
-            }
+                        return mInstance;
+                    }
+                    catch (Exception exception)
+                    {
+                        Log.Error($"Error loading '{mPath}'.", exception);
+                        ChatboxMsg.AddMessage(
+                            new ChatboxMsg(
+                                Strings.Errors.LoadFile.ToString(Strings.Words.lcase_sound), new Color(0xBF, 0x0, 0x0)
+                            )
+                        );
+                    }
 
-            return null;
+                    return null;
+                });
         }
 
         public void Close()
@@ -83,54 +88,60 @@ namespace Intersect.Client.MonoGame.Audio
 
 #if AUDIO_STREAMING
         private void BufferNeeded(object sender, EventArgs args)
-            => FillBuffers(mInstance as DynamicSoundEffectInstance);
+            => FillBuffers(mInstance as DynamicSoundEffectInstance ?? throw new InvalidOperationException());
 
-        private void FillBuffers(DynamicSoundEffectInstance instance, int buffers = 3, int samples = 44100)
+        private void FillBuffers([NotNull] DynamicSoundEffectInstance dynamicInstance, int buffers = 3, int samples = 44100)
         {
-            float[] sampleBuffer = null;
+            var sampleBuffer = new float[samples];
+            var dataBuffer = new byte[samples << 1];
 
-            while (instance.PendingBufferCount < buffers && mReader != null)
+            while (dynamicInstance.PendingBufferCount < buffers && mReader != null)
             {
-                if (sampleBuffer == null)
-                    sampleBuffer = new float[samples];
-
-                var read = mReader.ReadSamples(sampleBuffer, 0, sampleBuffer.Length);
-                if (read == 0)
+                var samplesRead = mReader.ReadSamples(sampleBuffer, 0, sampleBuffer.Length);
+                if (samplesRead == 0)
                 {
                     mReader.DecodedPosition = 0;
                     continue;
                 }
 
-                var dataBuffer = new byte[read << 1];
-                for (var sampleIndex = 0; sampleIndex < read; ++sampleIndex)
+                var dataIndex = 0;
+
+                for (var sampleIndex = 0; sampleIndex < samplesRead; ++sampleIndex)
                 {
-                    var sample = (short)MathHelper.Clamp(sampleBuffer[sampleIndex] * 32767f, short.MinValue, short.MaxValue);
-                    var sampleData = BitConverter.GetBytes(sample);
-                    for (var sampleByteIndex = 0; sampleByteIndex < sampleData.Length; ++sampleByteIndex)
-                        dataBuffer[(sampleIndex << 1) + sampleByteIndex] = sampleData[sampleByteIndex];
+                    var sample = (short)(sampleBuffer[sampleIndex] * short.MaxValue);
+                    dataBuffer[dataIndex++] = (byte)sample;
+                    dataBuffer[dataIndex++] = (byte)(sample >> 8);
                 }
 
-                instance.SubmitBuffer(dataBuffer, 0, read << 1);
+                dynamicInstance.SubmitBuffer(dataBuffer, 0, samplesRead << 1);
             }
         }
 #else
         private static SoundEffect Load([NotNull] VorbisReader vorbisReader)
         {
-            var sampleBuffer = new float[vorbisReader.SampleRate];
+            var sampleRate = vorbisReader.SampleRate;
+            var sampleBuffer = new float[sampleRate];
             var dataBuffer = new byte[vorbisReader.TotalSamples << 2];
             int samplesRead, dataIndex = 0;
-            while (0 != (samplesRead = vorbisReader.ReadSamples(sampleBuffer, 0, vorbisReader.SampleRate)))
+
+            var stopwatch = Stopwatch.StartNew();
+            while (0 != (samplesRead = vorbisReader.ReadSamples(sampleBuffer, 0, sampleRate)))
             {
                 for (var sampleIndex = 0; sampleIndex < samplesRead; ++sampleIndex)
                 {
-                    var sample = (short)MathHelper.Clamp(sampleBuffer[sampleIndex] * short.MaxValue, short.MinValue, short.MaxValue);
-                    var sampleData = BitConverter.GetBytes(sample);
-                    for (var sampleDataIndex = 0; sampleDataIndex < sampleData.Length; ++sampleDataIndex, ++dataIndex)
-                    {
-                        dataBuffer[dataIndex] = sampleData[sampleDataIndex];
-                    }
+                    var sample = (short)(sampleBuffer[sampleIndex] * short.MaxValue);
+                    dataBuffer[dataIndex++] = (byte) sample;
+                    dataBuffer[dataIndex++] = (byte) (sample >> 8);
                 }
             }
+
+            stopwatch.Stop();
+
+            Debug.WriteLine($"Loading took {stopwatch.ElapsedMilliseconds / 1000f}s.");
+
+            // var internalBuffer = new MemoryStream();
+            // var buffer = new GZipStream(internalBuffer, CompressionLevel.Optimal);
+            // buffer.Write(dataBuffer, 0, dataBuffer.Length);
 
             return new SoundEffect(dataBuffer, vorbisReader.SampleRate,
                 vorbisReader.Channels == 1 ? AudioChannels.Mono : AudioChannels.Stereo);

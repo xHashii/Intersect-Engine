@@ -39,6 +39,11 @@ namespace Intersect.Client.Framework.Audio
             }
         }
 
+        protected static float ComputeVolume(float volume, float volumeScale)
+        {
+            return volume * (volumeScale / 100f) / 100f;
+        }
+
         public abstract AudioInstanceState State { get; }
 
         protected abstract void InternalLoopSet();
